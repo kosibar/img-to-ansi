@@ -1,0 +1,394 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * img-to-ansi
+ * 
+ * This script converts an image in libgd-supported formats to ANSI text.
+ * 
+ * It currently only uses 24-bit ANSI colors. I wrote this for
+ * my own use and I use iTerm which supports 24-bit colors.
+ * Other color sets in ANSI vary depending on the terminal.
+ * Only 24-bit colors are truly the same between terminals.
+ * The drawback being that a lot of terminals don't support
+ * 24-bit color.
+ * 
+ * @author Rich Kosiba <rkosiba@kolbenet.com>
+ * @license https://www.gnu.org/licenses/gpl-3.0.en.html  GNU GPLv3 License
+ * @version 1.0.0
+ */
+
+
+//
+//! = = = = = = = Image = = = = = = =
+//
+
+/**
+ * Image
+ * 
+ * @property string    $path
+ * @property resource  $image
+ * 
+ * @property int       $width
+ * @property int       $height
+ */
+class Image {
+
+	//
+	//! - - - - - - - Properties - - - - - - -
+	//
+
+	protected $path = null;
+	protected $image = null;
+
+
+	//
+	//! - - - - - - - Constructor - - - - - - -
+	//
+
+	/**
+	 * Creates a new "Image" object.
+	 * @param string  $path   The path to the file.
+	 * @return this
+	 */
+	public function __construct(string $path) {
+		$this->path = $path;
+	}
+
+
+	//
+	//! - - - - - - - Magic Methods - - - - - - -
+	//
+
+	/**
+	 * Gets the value of a property.
+	 * @param string  $prop
+	 * @return mixed
+	 */
+	public function __get($prop) {
+		switch($prop) {
+			case "path":
+				return $this->$prop;
+
+			case "image":
+				return ($this->image === null)
+					? $this->getImage()
+					: $this->image
+				;
+
+			case "width":
+				return $this->getWidth();
+
+			case "height":
+				return $this->getHeight();
+	
+			default:
+				throw new RuntimeException('Invalid property: "'.$prop.'"');
+		}
+	}
+
+	/**
+	 * Sets the value of a property.
+	 * @param string  $prop
+	 * @param mixed   $value
+	 * @return mixed
+	 */
+	public function __set($prop, $value) {
+		switch($prop) {
+			case "path":
+			case "width":
+			case "height":
+				throw new RuntimeException('Cannot set read-only property "'.$prop.'"');
+	
+			default:
+				throw new RuntimeException('Invalid property: "'.$prop.'"');
+		}
+	}
+
+
+	//
+	//! - - - - - - - Methods - - - - - - -
+	//
+
+	/**
+	 * Returns an image resource for this file.
+	 * @param bool  $reload=false
+	 * @return Gdimage
+	 */
+	public function getImage(bool $reload=false) {
+		if($reload || $this->image === null) {
+			$path = $this->path;
+			if(!is_file($path)) {
+				$real = realpath($path);
+				if($real === false) throw new RuntimeException('Path is not a file: '.$this->path);
+				$path = $real;
+			}
+
+			switch(mime_content_type($path)) {
+				case "image/bmp":
+					$this->image = imagecreatefrombmp($path);
+					break;
+
+				case "image/gif":
+					$this->image = imagecreatefromgif($path);
+					break;
+
+				case "image/jpeg":
+					$this->image = imagecreatefromjpeg($path);
+					break;
+
+				case "image/png":
+					$this->image = imagecreatefrompng($path);
+					break;
+
+				case "images/x-tga":
+				case "images/x-targa":
+					$this->image = imagecreatefromtga($path);
+					break;
+
+				case "images/vnd.wap.wbmp":
+					$this->image = imagecreatefromwbmp($path);
+					break;
+
+				case "images/webp":
+					$this->image = imagecreatefromwebp($path);
+					break;
+
+				case "images/xbm":
+					$this->image = imagecreatefromxbm($path);
+					break;
+
+				case "images/xpm":
+					$this->image = imagecreatefromxpm($path);
+					break;
+
+				default:
+					throw new RuntimeException('Unable to open image file: '.$this->path);
+			}
+		}
+		return $this->image;
+	}
+
+	/**
+	 * Returns the height of this image.
+	 * @return int
+	 */
+	public function getHeight() : int {
+		return imagesy($this->getImage());
+	}
+
+	/**
+	 * Returns the width of this image.
+	 * @return int
+	 */
+	public function getWidth() : int {
+		return imagesx($this->getImage());
+	}
+
+	/**
+	 * Resize this image to the given size.
+	 * @param int|null  $width=null
+	 * @param int|null  $height=null
+	 * @return this
+	 */
+	public function resize(int $width=null, int $height=null) : Image {
+		$current_width = $this->getWidth();
+		$current_height = $this->getHeight();
+
+		if($width === null) {
+			if($height === null) return $this;
+			$ratio = $height / $current_height;
+			$width = round($current_width * $ratio);
+		} elseif($height === null) {
+			$ratio = $width / $current_width;
+			$height = round($current_height * $ratio);
+		}
+
+		$resized = imagecreatetruecolor($width, $height);
+		imagecopyresampled($resized, $this->getImage(), 0, 0, 0, 0, $width, $height, $current_width, $current_height);
+		$this->image = $resized;
+
+		return $this;
+	}
+
+	/**
+	 * Return this image as ANSI.
+	 * @return string
+	 */
+	public function toANSI() : string {
+		$result = "";
+
+		$image = $this->getImage();
+		$width = $this->getWidth();
+		$height = $this->getHeight();
+		$char = mb_chr(9600);
+
+		$fg = null;
+		$bg = null;
+
+		for($y = 0; $y < $height; $y += 2) {
+			for($x = 0; $x < $width; $x++) {
+				$current_fg = "38;2;".implode(";", static::toRGB(imagecolorat($image, $x, $y)));
+				$current_bg = ($y + 1 < $height)
+					? "48;2;".implode(";", static::toRGB(imagecolorat($image, $x, $y+1)))
+					: "49"
+				;
+
+				if($current_fg !== $fg || $current_bg !== $bg) {
+					$result .= "\033[";
+					if($current_fg !== $fg) $result .= $current_fg;
+					if($current_fg !== $fg && $current_bg !== $bg) $result .= ";";
+					if($current_bg !== $bg) $result .= $current_bg;
+					$result .= "m";
+				}
+
+				$result .= $char;
+
+				$fg = $current_fg;
+				$bg = $current_bg;
+			}
+
+			$bg = null;
+			$result .= "\033[49m";
+			$result .= PHP_EOL;
+		}
+
+		return $result;
+	}
+
+
+	//
+	//! - - - - - - - Static Methods - - - - - - -
+	//
+
+	/**
+	 * Returns the RGB codes for the given color index.
+	 * @param int  $color
+	 * @return array
+	 */
+	public static function toRGB($color) : array {
+		return (is_int($color))
+			? [
+				(($color >> 16) & 255),
+				(($color >> 8) & 255),
+				($color & 255 ),
+			]
+			: [ 0, 0, 0 ]
+		;
+	}
+}
+
+
+//
+//! = = = = = = = Arguments = = = = = = =
+//
+
+$args = (object) [
+	"input" => null,
+	"output" => null,
+	"width" => null,
+	"height" => null,
+];
+
+function usage(string $error=null) {
+	echo PHP_EOL;
+	echo "usage: ".basename(__FILE__)." [options]".PHP_EOL;
+	echo "  Options:".PHP_EOL;
+	echo "    -i   --input=...    The path to the input file. (required)".PHP_EOL;
+	echo "    -o   --output=...   The path to the output file.".PHP_EOL;
+	echo "    -w   --width=...    The output width.".PHP_EOL;
+	echo "    -h   --height=...   The output height.".PHP_EOL;
+	echo "    -?   --help         Output this help text.".PHP_EOL;
+	echo PHP_EOL;
+
+	if($error !== null) {
+		echo "ERROR!".PHP_EOL;
+		echo preg_replace("/^/m", "  ", trim($error)).PHP_EOL;
+		echo PHP_EOL;
+	}
+
+	exit;
+}
+
+for($i = 1; $i < $argc; $i++) {
+	if(preg_match("/^(-[a-z?]|--[a-z]+)(?:=(.+))$/S", $argv[$i], $match, PREG_UNMATCHED_AS_NULL)) {
+		$name = $match[1];
+		switch($name) {
+			case "-i":
+			case "--input":
+				$name = "input";
+				break;
+
+			case "-o":
+			case "--output":
+				$name = "output";
+				break;
+
+			case "-w":
+			case "--width":
+				$name = "width";
+				break;
+
+			case "-h":
+			case "--height":
+				$name = "height";
+				break;
+
+			case "-?":
+			case "--help":
+				usage();
+
+			default:
+				usage("Invalid argument: ".$name);
+		}
+
+		$value = $match[2];
+		switch($name) {
+			case "input":
+				if($value === null) usage("Invalid input path: (null)");
+				if(!file_exists($value)) usage("File not found: ".$value);
+				if(!is_readable($value)) usage("Access denied reading file: ".$value);
+				$args->input = $value;
+				break;
+
+			case "output":
+				if($value === null) usage("Invalid ".$name." path.");
+				if($value === "") usage("Invalid ".$name.' path: ""');
+				$args->output = $value;
+				break;
+
+			case "width":
+			case "height":
+				if($value === null) usage("Invalid ".$name.": (null)");
+				if(!is_numeric($value) || $value <= 0 || intval($value) != $value) usage("Invalid ".$name.": ".$value);
+				$args->$name = intval($value);
+				break;
+		}
+	}
+}
+
+if($args->input === null) {
+	usage("Missing required --input argument.");
+}
+
+
+//
+//! = = = = = = = Execute = = = = = = =
+//
+
+try {
+	$image = new Image($args->input);
+	$image->resize($args->width, $args->height);
+	$ansi = $image->toANSI();
+	if($args->output === null) {
+		echo $ansi;
+		echo PHP_EOL;
+	} elseif(@file_put_contents($args->output, $ansi)) {
+		echo "Wrote ".number_format(strlen($ansi))." bytes to:".PHP_EOL;
+		echo $args->output.PHP_EOL;
+	} else {
+		throw new RuntimeException("Failed to write output file: ".$args->output);
+	}
+} catch(Exception $e) {
+	usage($e->getMessage());
+}
